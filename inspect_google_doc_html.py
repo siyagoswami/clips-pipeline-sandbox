@@ -10,8 +10,7 @@ print(f"File exists? {HTML_PATH.exists()}")
 
 if not HTML_PATH.exists():
     raise FileNotFoundError(
-        f"Could not find {HTML_PATH}. Make sure your exported Google Doc HTML "
-        "is saved as input/clips_draft_workspace.html"
+        f"Could not find {HTML_PATH}."
     )
 
 html = HTML_PATH.read_text(encoding="utf-8", errors="replace")
