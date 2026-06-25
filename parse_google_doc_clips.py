@@ -1,13 +1,16 @@
 from pathlib import Path 
 from bs4 import BeautifulSoup 
-from urllib.parse import urlparse, parse_qs, unquote 
+from urllib.parse import urlparse, urlunparse, parse_qs, unquote, parse_qsl, urlencode
 
 import csv 
 import re 
 from datetime import datetime 
+import hashlib
 
 HTML_PATH = Path("input/clips_draft_workspace.html")
 OUTPUT_PATH = Path("output/google_doc_clips_sample.csv")
+JURISDICTIONS_PATH = Path("input/mock_dim_jurisdictions.csv")
+
 
 REGIONS = {
     "NORTHEAST", 
@@ -22,6 +25,7 @@ REGIONS = {
     "MIDWEST", 
     "CO/NM/NV",
     "AZ/UT", 
+    "OH/PA"
     "CALIFORNIA"
 }
 
@@ -37,6 +41,79 @@ STATE_NAMES = {
     "TEXAS", "UTAH", "VERMONT", "VIRGINIA", "WASHINGTON",
     "WEST VIRGINIA", "WISCONSIN", "WYOMING",
 }
+
+def normalize_url_for_id(url: str | None) -> str | None: 
+    # normalizes URL so the same article receives same clip_id each time parser runs 
+    # same normalized URL in results in same hashed clip_id result 
+
+    if not url: 
+        return None 
+    
+    url = url.strip()
+    parsed = urlparse(url)
+
+    scheme = parsed.scheme.lower()
+    netloc = parsed.netloc.lower()
+    path = parsed.path.rstrip("/")
+    tracking_prefixes = (
+        "utm", 
+    )
+
+    tracking_params = {
+        "fbclid",
+        "gclid",
+        "mc_cid",
+        "mc_eid",
+    }
+
+    cleaned_query_params = []
+
+    for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+        key_lower = key.lower()
+
+        if key_lower.startswith(tracking_prefixes):
+            continue
+
+        if key_lower in tracking_params:
+            continue
+
+        cleaned_query_params.append((key, value))
+
+    cleaned_query = urlencode(cleaned_query_params)
+
+    normalized = urlunparse(
+        (
+            scheme,
+            netloc,
+            path,
+            "",
+            cleaned_query,
+            "",
+        )
+    )
+
+    return normalized
+
+def generate_clip_id(url: str | None, title: str | None, publisher: str | None, published_date: str | None, ) -> str: 
+        
+        # clip_id using url
+        # fallback is title + publisher + published date 
+
+        normalized_url = normalize_url_for_id(url)
+        if normalized_url: 
+            id_source = normalized_url 
+        else: 
+            id_source = "|".join(
+                [
+                    clean_text(title or "").lower(),
+                    clean_text(publisher or "").lower(),
+                    clean_text(published_date or "").lower(),
+                ]
+            )
+
+        hashed = hashlib.sha256(id_source.encode("utf-8")).hexdigest()[:12]
+
+        return f"clip_{hashed}"
 
 def clean_text(text: str) -> str: 
     return " ".join((text or "").split()).strip()
@@ -94,7 +171,7 @@ def extract_metadata(text: str) -> tuple[str | None, str | None, str]:
         metadata = bracket_match.group(1)
         body = text[:bracket_match.start()].strip()
     else: 
-        metadta = ""
+        metadata = ""
         body = text.strip()
 
     date_pattern = re.compile(
@@ -126,22 +203,6 @@ def extract_metadata(text: str) -> tuple[str | None, str | None, str]:
             publisher = publisher_candidate.strip(" ,") or None
 
     return publisher, published_date, body 
-
-def debug_bold_detection(block, body: str) -> None:
-    print("\nDEBUG: No colon found and snippet is coming back None")
-    print("BODY PREVIEW:")
-    print(body[:500])
-
-    print("\nHTML pieces inside this block:")
-    for i, tag in enumerate(block.find_all(["b", "strong", "span"])[:20]):
-        text = clean_text(tag.get_text(" "))
-        style = tag.get("style", "")
-
-        if text:
-            print("----")
-            print(f"TAG {i}: <{tag.name}>")
-            print(f"TEXT: {text[:200]}")
-            print(f"STYLE: {style}")
 
 def get_initial_bold_title(block) -> str | None:
 
@@ -215,6 +276,53 @@ def extract_doc_date_header(text: str) -> str | None:
     
     return None
 
+def build_searchable_location_text(title: str | None, snippet: str | None, raw_clip_text: str | None, state_name: str | None, region: str | None,) -> str: 
+    # builds one combined text field for location matching 
+    # takes multiple clip fields, removes blanks, joins everything into one searchable string
+
+    parts = [
+        title, 
+        snippet, 
+        raw_clip_text, 
+        state_name, 
+        region,
+    ]
+
+    cleaned_parts = []
+    for part in parts: 
+        cleaned = clean_text(part or "")
+
+        if cleaned: 
+            cleaned_parts.append(cleaned)
+    
+    return " ".join(cleaned_parts)
+
+def normalize_text_for_matching(text: str | None) -> str: 
+    if not text: 
+        return ""
+
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+def load_jurisdictions() -> list[dict]:
+    if not JURISDICTIONS_PATH.exists():
+        raise FileNotFoundError(f"Could not find {JURISDICTIONS_PATH}")
+
+    jurisdictions = []
+
+    with JURISDICTIONS_PATH.open("r", encoding="utf-8") as f: 
+        reader = csv.DictReader(f)
+
+        for row in reader: 
+            jurisdictions.append(row)
+        
+        print(f"Loaded {len(jurisdictions)} jurisdictions")
+
+        return jurisdictions
+
 def main () -> None: 
     # reads Google Doc HTML, walks through HTML blocks in order, tracks the current date/region/state, finds full clips, extracts fields, writes output to CSV
 
@@ -227,6 +335,7 @@ def main () -> None:
     blocks = soup.find_all(["p", "h1", "h2", "h3", "li", "td", "span", "div"])
     
     rows = []
+    started_running_daily_clips = False
     current_region = None 
     current_state = None 
     current_doc_date = None 
@@ -235,6 +344,12 @@ def main () -> None:
         text = clean_text(block.get_text(" "))
 
         if not text: 
+            continue 
+
+        if not started_running_daily_clips:
+            if "running daily clips" in text.lower():
+                started_running_daily_clips = True 
+                print("Found Running Daily Clips - starting parser from here: ")
             continue 
 
         upper = text.upper().strip()
@@ -250,6 +365,8 @@ def main () -> None:
 
         if upper in REGIONS: 
             current_region = upper.title()
+            current_state = None 
+            print(f"Found region: {current_region}")
             continue 
 
         if upper in STATE_NAMES: 
@@ -266,8 +383,13 @@ def main () -> None:
         url = clean_google_redirect_url(links[0]) if links else None 
 
         source_record_id = f"google_doc_{len(rows) + 1}"
+        clip_id = generate_clip_id(url=url, title=title, publisher=publisher, published_date=published_date)
+        
+        searchable_location_text = build_searchable_location_text(title=title, snippet=snippet, raw_clip_text=text, state_name=current_state, region=current_region)
+        normalized_searchable_location_text = normalize_text_for_matching(searchable_location_text)
 
         rows.append({
+            "clip_id": clip_id,
             "source_system": "clips_draft_workspace",
             "source_record_id": source_record_id, 
             "doc_date": current_doc_date, 
@@ -279,9 +401,14 @@ def main () -> None:
             "published_date": published_date, 
             "url": url, 
             "raw_clip_text": text, 
+            "searchable_location_text": searchable_location_text,
+            "normalized_searchable_location_text": normalized_searchable_location_text,
             "created_at": datetime.utcnow().isoformat(),
         })
     
+    if not started_running_daily_clips: 
+        print("WARNING: Did not find 'Running Daily Clips' section in the document.")
+
     print(f"Parsed {len(rows)} clips")
     if rows: 
         fieldnames = list(rows[0].keys())
