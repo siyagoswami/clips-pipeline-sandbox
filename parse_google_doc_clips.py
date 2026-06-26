@@ -11,7 +11,6 @@ HTML_PATH = Path("input/clips_draft_workspace.html")
 OUTPUT_PATH = Path("output/google_doc_clips_sample.csv")
 JURISDICTIONS_PATH = Path("input/mock_dim_jurisdictions.csv")
 
-
 REGIONS = {
     "NORTHEAST", 
     "NORTH-CENTRAL", 
@@ -323,6 +322,26 @@ def load_jurisdictions() -> list[dict]:
 
         return jurisdictions
 
+def find_exact_jurisdiction_matches(normalized_searchable_location_text: str, jurisdictions: list[dict]) -> list[dict]: 
+    # finds jurisdictions whose normalized_name appears exactly in the clip text 
+    matches = []
+    searchable_text = f" {normalized_searchable_location_text} "
+
+    for jurisdiction in jurisdictions: 
+        normalized_name = normalize_text_for_matching(
+            jurisdiction.get("normalized_name")
+        )
+
+        if not normalized_name: 
+            continue 
+
+        search_name = f" {normalized_name} "
+        if search_name in searchable_text: 
+            matches.append(jurisdiction)
+        
+
+    return matches 
+
 def main () -> None: 
     # reads Google Doc HTML, walks through HTML blocks in order, tracks the current date/region/state, finds full clips, extracts fields, writes output to CSV
 
@@ -335,6 +354,7 @@ def main () -> None:
     blocks = soup.find_all(["p", "h1", "h2", "h3", "li", "td", "span", "div"])
     
     rows = []
+    jurisdictions = load_jurisdictions()
     started_running_daily_clips = False
     current_region = None 
     current_state = None 
@@ -387,6 +407,17 @@ def main () -> None:
         
         searchable_location_text = build_searchable_location_text(title=title, snippet=snippet, raw_clip_text=text, state_name=current_state, region=current_region)
         normalized_searchable_location_text = normalize_text_for_matching(searchable_location_text)
+        jurisdiction_matches = find_exact_jurisdiction_matches(normalized_searchable_location_text=normalized_searchable_location_text, jurisdictions=jurisdictions)
+        
+        matched_jurisdiction_names = [
+            match.get("jurisdiction_name")
+            for match in jurisdiction_matches
+            ]
+
+        matched_jurisdiction_ids = [
+            match.get("jurisdiction_id")
+            for match in jurisdiction_matches
+        ]
 
         rows.append({
             "clip_id": clip_id,
@@ -403,6 +434,9 @@ def main () -> None:
             "raw_clip_text": text, 
             "searchable_location_text": searchable_location_text,
             "normalized_searchable_location_text": normalized_searchable_location_text,
+            "matched_jurisdiction_names": "; ".join(matched_jurisdiction_names),
+            "matched_jurisdiction_ids": "; ".join(matched_jurisdiction_ids), 
+            "match_count": len(jurisdiction_matches),
             "created_at": datetime.utcnow().isoformat(),
         })
     
