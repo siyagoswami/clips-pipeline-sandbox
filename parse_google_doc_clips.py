@@ -94,7 +94,6 @@ def normalize_url_for_id(url: str | None) -> str | None:
     return normalized
 
 def generate_clip_id(url: str | None, title: str | None, publisher: str | None, published_date: str | None, ) -> str: 
-        
         # clip_id using url
         # fallback is title + publisher + published date 
 
@@ -204,6 +203,7 @@ def extract_metadata(text: str) -> tuple[str | None, str | None, str]:
     return publisher, published_date, body 
 
 def get_initial_bold_title(block) -> str | None:
+    # title is bolded in most clips - extracting title based on this criteria 
 
     bold_pieces = []
 
@@ -237,6 +237,7 @@ def get_initial_bold_title(block) -> str | None:
     return bold_text or None
     
 def parse_title_and_snippet(body: str, block=None) -> tuple[str | None, str | None]:
+    # based on if a colon exists or not - if not, the first quotation is found to signal the start of a clip
 
     if ":" in body:
         title, snippet = body.split(":", 1)
@@ -297,6 +298,8 @@ def build_searchable_location_text(title: str | None, snippet: str | None, raw_c
     return " ".join(cleaned_parts)
 
 def normalize_text_for_matching(text: str | None) -> str: 
+    # lowercase and remove whitespace
+
     if not text: 
         return ""
 
@@ -324,6 +327,7 @@ def load_jurisdictions() -> list[dict]:
 
 def find_exact_jurisdiction_matches(normalized_searchable_location_text: str, jurisdictions: list[dict]) -> list[dict]: 
     # finds jurisdictions whose normalized_name appears exactly in the clip text 
+    
     matches = []
     searchable_text = f" {normalized_searchable_location_text} "
 

@@ -55,6 +55,8 @@ def fetch_article_text(url: str) -> str:
 
 def extract_location_candidates_with_spacy(article_text: str, nlp) -> list[str]:
     # spaCy labels: GPE = countries, cities, and states / LOC = non-GPE locations \ FAC = facilities/buildings
+    # extracts potential location entities in the article text  
+
     doc = nlp(article_text)
     candidates = []
 
@@ -78,6 +80,8 @@ def extract_location_candidates_with_spacy(article_text: str, nlp) -> list[str]:
     return deduped 
 
 def match_candidates_to_jurisdictions(candidates: list[str], jurisdictions: list[dict],) -> list[dict]:
+    # compares location entities to jurisdictions for potential matches using normalized_name field 
+
     matches = []
     normalized_candidates = {
         normalize_text_for_matching(candidate): candidate
