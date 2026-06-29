@@ -9,7 +9,7 @@ import hashlib
 
 HTML_PATH = Path("input/clips_draft_workspace.html")
 OUTPUT_PATH = Path("output/google_doc_clips_sample.csv")
-JURISDICTIONS_PATH = Path("input/mock_dim_jurisdictions.csv")
+JURISDICTIONS_PATH = Path("input/dim_jurisdictions.csv")
 
 REGIONS = {
     "NORTHEAST", 
@@ -39,6 +39,86 @@ STATE_NAMES = {
     "RHODE ISLAND", "SOUTH CAROLINA", "SOUTH DAKOTA", "TENNESSEE",
     "TEXAS", "UTAH", "VERMONT", "VIRGINIA", "WASHINGTON",
     "WEST VIRGINIA", "WISCONSIN", "WYOMING",
+}
+
+GENERIC_LOCATION_WORDS = {
+    "north",
+    "south",
+    "east",
+    "west",
+    "central",
+    "center",
+    "upper",
+    "lower",
+    "new",
+    "old",
+    "lake",
+    "river",
+    "mount",
+    "mt",
+}
+
+ALLOWED_JURISDICTION_TYPES = {
+    "state",
+    "county",
+    "city",
+    "town",
+    "township",
+    "county_subdivision",
+    "place",
+}
+
+STATE_NAME_TO_ABBR = {
+    "alabama": "AL",
+    "alaska": "AK",
+    "arizona": "AZ",
+    "arkansas": "AR",
+    "california": "CA",
+    "colorado": "CO",
+    "connecticut": "CT",
+    "delaware": "DE",
+    "florida": "FL",
+    "georgia": "GA",
+    "hawaii": "HI",
+    "idaho": "ID",
+    "illinois": "IL",
+    "indiana": "IN",
+    "iowa": "IA",
+    "kansas": "KS",
+    "kentucky": "KY",
+    "louisiana": "LA",
+    "maine": "ME",
+    "maryland": "MD",
+    "massachusetts": "MA",
+    "michigan": "MI",
+    "minnesota": "MN",
+    "mississippi": "MS",
+    "missouri": "MO",
+    "montana": "MT",
+    "nebraska": "NE",
+    "nevada": "NV",
+    "new hampshire": "NH",
+    "new jersey": "NJ",
+    "new mexico": "NM",
+    "new york": "NY",
+    "north carolina": "NC",
+    "north dakota": "ND",
+    "ohio": "OH",
+    "oklahoma": "OK",
+    "oregon": "OR",
+    "pennsylvania": "PA",
+    "rhode island": "RI",
+    "south carolina": "SC",
+    "south dakota": "SD",
+    "tennessee": "TN",
+    "texas": "TX",
+    "utah": "UT",
+    "vermont": "VT",
+    "virginia": "VA",
+    "washington": "WA",
+    "west virginia": "WV",
+    "wisconsin": "WI",
+    "wyoming": "WY",
 }
 
 def normalize_url_for_id(url: str | None) -> str | None: 
@@ -202,6 +282,14 @@ def extract_metadata(text: str) -> tuple[str | None, str | None, str]:
 
     return publisher, published_date, body 
 
+def get_state_abbr_from_doc_state(state_name: str | None) -> str: 
+    normalized_state_name = normalize_text_for_matching(state_name)
+
+    if not normalized_state_name: 
+        return ""
+    
+    return STATE_NAME_TO_ABBR.get(normalized_state_name, "")
+
 def get_initial_bold_title(block) -> str | None:
     # title is bolded in most clips - extracting title based on this criteria 
 
@@ -325,6 +413,30 @@ def load_jurisdictions() -> list[dict]:
 
         return jurisdictions
 
+def is_usable_jurisdiction_name(normalized_name: str | None) -> bool:
+    normalized_name = normalize_text_for_matching(normalized_name)
+    if not normalized_name: 
+        return False 
+    
+    if normalized_name.isdigit():
+        return False 
+    
+    if len(normalized_name) < 4: 
+        return False
+    
+    if normalized_name in GENERIC_LOCATION_WORDS:
+        return False 
+    
+    return True
+
+def is_allowed_jurisdiction_type(jurisdiction_type: str | None) -> bool:
+    jurisdiction_type = normalize_text_for_matching(jurisdiction_type)
+
+    if not jurisdiction_type: 
+        return False 
+    
+    return jurisdiction_type in ALLOWED_JURISDICTION_TYPES
+
 def find_exact_jurisdiction_matches(normalized_searchable_location_text: str, jurisdictions: list[dict]) -> list[dict]: 
     # finds jurisdictions whose normalized_name appears exactly in the clip text 
     
@@ -336,8 +448,13 @@ def find_exact_jurisdiction_matches(normalized_searchable_location_text: str, ju
             jurisdiction.get("normalized_name")
         )
 
-        if not normalized_name: 
+        jurisdiction_type = jurisdiction.get("jurisdiction_type")
+
+        if not is_usable_jurisdiction_name(normalized_name): 
             continue 
+
+        if not is_allowed_jurisdiction_type(jurisdiction_type):
+            continue
 
         search_name = f" {normalized_name} "
         if search_name in searchable_text: 
@@ -345,6 +462,24 @@ def find_exact_jurisdiction_matches(normalized_searchable_location_text: str, ju
         
 
     return matches 
+
+def dedupe_matches_by_jurisdiction_id(matches: list[dict]) -> list[dict]:
+    deduped = []
+    seen_ids = set()
+
+    for match in matches: 
+        jurisdiction_id = match.get("jurisdiction_id")
+
+        if not jurisdiction_id: 
+            continue 
+
+        if jurisdiction_id in seen_ids: 
+            continue 
+
+        deduped.append(match)
+        seen_ids.add(jurisdiction_id)
+
+    return deduped 
 
 def main () -> None: 
     # reads Google Doc HTML, walks through HTML blocks in order, tracks the current date/region/state, finds full clips, extracts fields, writes output to CSV
@@ -377,11 +512,6 @@ def main () -> None:
             continue 
 
         upper = text.upper().strip()
-        # date_match = re.search(r"Daily Template\s+(\d{1,2}/\d{1,2})", text, flags=re.IGNORECASE)
-
-        # if date_match: 
-        #     current_doc_date = date_match.group(1)
-        #     continue 
 
         doc_date_header = extract_doc_date_header(text)
         if doc_date_header:
@@ -412,9 +542,10 @@ def main () -> None:
         searchable_location_text = build_searchable_location_text(title=title, snippet=snippet, raw_clip_text=text, state_name=current_state, region=current_region)
         normalized_searchable_location_text = normalize_text_for_matching(searchable_location_text)
         jurisdiction_matches = find_exact_jurisdiction_matches(normalized_searchable_location_text=normalized_searchable_location_text, jurisdictions=jurisdictions)
-        
+        jurisdiction_matches = dedupe_matches_by_jurisdiction_id(jurisdiction_matches)
+
         matched_jurisdiction_names = [
-            match.get("jurisdiction_name")
+            f"{match.get('jurisdiction_name')} ({match.get('jurisdiction_type')}, {match.get('state_abbr')})"
             for match in jurisdiction_matches
             ]
 
