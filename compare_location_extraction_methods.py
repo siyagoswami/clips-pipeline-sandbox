@@ -32,6 +32,7 @@ ALLOWED_JURISDICTION_TYPES = {
     "town",
     "township",
     "county_subdivision",
+    "county subdivision",
     "place",
 }
 
@@ -88,6 +89,112 @@ US_STATE_NAMES = {
     "wyoming",
 }
 
+STATE_NAME_TO_ABBR = {
+    "alabama": "AL",
+    "alaska": "AK",
+    "arizona": "AZ",
+    "arkansas": "AR",
+    "california": "CA",
+    "colorado": "CO",
+    "connecticut": "CT",
+    "delaware": "DE",
+    "florida": "FL",
+    "georgia": "GA",
+    "hawaii": "HI",
+    "idaho": "ID",
+    "illinois": "IL",
+    "indiana": "IN",
+    "iowa": "IA",
+    "kansas": "KS",
+    "kentucky": "KY",
+    "louisiana": "LA",
+    "maine": "ME",
+    "maryland": "MD",
+    "massachusetts": "MA",
+    "michigan": "MI",
+    "minnesota": "MN",
+    "mississippi": "MS",
+    "missouri": "MO",
+    "montana": "MT",
+    "nebraska": "NE",
+    "nevada": "NV",
+    "new hampshire": "NH",
+    "new jersey": "NJ",
+    "new mexico": "NM",
+    "new york": "NY",
+    "north carolina": "NC",
+    "north dakota": "ND",
+    "ohio": "OH",
+    "oklahoma": "OK",
+    "oregon": "OR",
+    "pennsylvania": "PA",
+    "rhode island": "RI",
+    "south carolina": "SC",
+    "south dakota": "SD",
+    "tennessee": "TN",
+    "texas": "TX",
+    "utah": "UT",
+    "vermont": "VT",
+    "virginia": "VA",
+    "washington": "WA",
+    "west virginia": "WV",
+    "wisconsin": "WI",
+    "wyoming": "WY",
+}
+
+STATE_NAME_TO_FIPS = {
+    "alabama": "01",
+    "alaska": "02",
+    "arizona": "04",
+    "arkansas": "05",
+    "california": "06",
+    "colorado": "08",
+    "connecticut": "09",
+    "delaware": "10",
+    "florida": "12",
+    "georgia": "13",
+    "hawaii": "15",
+    "idaho": "16",
+    "illinois": "17",
+    "indiana": "18",
+    "iowa": "19",
+    "kansas": "20",
+    "kentucky": "21",
+    "louisiana": "22",
+    "maine": "23",
+    "maryland": "24",
+    "massachusetts": "25",
+    "michigan": "26",
+    "minnesota": "27",
+    "mississippi": "28",
+    "missouri": "29",
+    "montana": "30",
+    "nebraska": "31",
+    "nevada": "32",
+    "new hampshire": "33",
+    "new jersey": "34",
+    "new mexico": "35",
+    "new york": "36",
+    "north carolina": "37",
+    "north dakota": "38",
+    "ohio": "39",
+    "oklahoma": "40",
+    "oregon": "41",
+    "pennsylvania": "42",
+    "rhode island": "44",
+    "south carolina": "45",
+    "south dakota": "46",
+    "tennessee": "47",
+    "texas": "48",
+    "utah": "49",
+    "vermont": "50",
+    "virginia": "51",
+    "washington": "53",
+    "west virginia": "54",
+    "wisconsin": "55",
+    "wyoming": "56",
+}
+
 def clean_text(text: str | None) -> str:
     return " ".join((text or "").split()).strip()
 
@@ -100,6 +207,39 @@ def normalize_text_for_matching(text: str | None) -> str:
     text = re.sub(r"\s+", " ", text)
 
     return text.strip()
+
+def get_state_abbr_from_doc_state(state_name: str | None) -> str: 
+    normalized_state_name = normalize_text_for_matching(state_name)
+
+    if not normalized_state_name: 
+        return ""
+    
+    return STATE_NAME_TO_ABBR.get(normalized_state_name, "")
+
+def normalize_state_fips(value: str | int | None) -> str: 
+    if value is None: 
+        return ""
+    
+    value = str(value).strip()
+
+    if not value: 
+        return ""
+    
+    if value.endswith(".0"): 
+        value = value[:-2]
+
+    if not value.isdigit():
+        return ""
+    
+    return value.zfill(2)
+
+def get_state_fips_from_doc_state(state_name: str | None) -> str:
+    normalized_state_name = normalize_text_for_matching(state_name)
+
+    if not normalized_state_name:
+        return ""
+
+    return STATE_NAME_TO_FIPS.get(normalized_state_name, "")
 
 def load_jurisdictions() -> list[dict]:
     if not JURISDICTIONS_PATH.exists():
@@ -222,9 +362,10 @@ def infer_candidate_jurisdiction_type(candidate: str) -> str:
 
     return ""
 
-def match_spacy_candidates_to_jurisdictions(spacy_candidates: list[str], jurisdictions: list[dict],) -> list[dict]:
+def match_spacy_candidates_to_jurisdictions(spacy_candidates: list[str], jurisdictions: list[dict], doc_state_name: str | None,) -> list[dict]:
     matches = []
     seen_jurisdiction_ids = set()
+    doc_state_fips = get_state_fips_from_doc_state(doc_state_name)
 
     candidate_lookup = {}
 
@@ -235,6 +376,7 @@ def match_spacy_candidates_to_jurisdictions(spacy_candidates: list[str], jurisdi
             candidate_lookup[variant] = {
                 "original_candidate": candidate, 
                 "inferred_type": inferred_type,
+                "doc_state_fips": doc_state_fips,
             }
 
     for jurisdiction in jurisdictions:
@@ -242,7 +384,11 @@ def match_spacy_candidates_to_jurisdictions(spacy_candidates: list[str], jurisdi
             jurisdiction.get("normalized_name")
         )
 
-        jurisdiction_type = jurisdiction.get("jurisdiction_type")
+        jurisdiction_type = normalize_text_for_matching(
+            jurisdiction.get("jurisdiction_type")
+        )
+
+        jurisdiction_state_fips = normalize_state_fips(jurisdiction.get("state_fips"))
 
         if not is_usable_jurisdiction_name(normalized_name):
             continue
@@ -259,6 +405,9 @@ def match_spacy_candidates_to_jurisdictions(spacy_candidates: list[str], jurisdi
         if inferred_type and jurisdiction_type != inferred_type:
             continue
 
+        if doc_state_fips and jurisdiction_state_fips != doc_state_fips:
+            continue
+
         jurisdiction_id = jurisdiction.get("jurisdiction_id")
 
         if not jurisdiction_id:
@@ -270,6 +419,7 @@ def match_spacy_candidates_to_jurisdictions(spacy_candidates: list[str], jurisdi
         match = dict(jurisdiction)
         match["spacy_candidate_text"] = candidate_info["original_candidate"]
         match["inferred_candidate_type"] = inferred_type
+        match["paired_state_fips"] = doc_state_fips
 
         matches.append(match)
         seen_jurisdiction_ids.add(jurisdiction_id)
@@ -314,15 +464,17 @@ def main() -> None:
         spacy_jurisdiction_matches = match_spacy_candidates_to_jurisdictions(
             spacy_candidates=spacy_candidates, 
             jurisdictions=jurisdictions,
+            doc_state_name=row.get("state_name", ""),
         )
 
         spacy_mapped_jurisdictions = [
         (
             f"{match.get('jurisdiction_name')} "
-            f"({match.get('jurisdiction_type')}, {match.get('state_abbr')})"
+            f"({match.get('jurisdiction_type')}, state_fips={match.get('state_fips')}) "
+            f"[from: {match.get('spacy_candidate_text')}]"
         )
         for match in spacy_jurisdiction_matches
-        ]
+    ]
 
         spacy_mapped_jurisdiction_ids = [
             match.get("jurisdiction_id", "")
@@ -335,6 +487,8 @@ def main() -> None:
             "title": row.get("title", ""),
             "snippet": row.get("snippet", ""),
             "state_name": row.get("state_name", ""),
+            "paired_state_name": row.get("state_name", ""), 
+            "paired_state_fips": get_state_fips_from_doc_state(row.get("state_name", "")),
             "region": row.get("region", ""),
             "url": row.get("url", ""),
             "keyword_candidate_names": row.get("matched_jurisdiction_names", ""),
